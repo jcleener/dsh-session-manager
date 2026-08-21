@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-manager",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browse, search, categorize, archive and restore DSH sessions without deleting data.",
   "type": "module",
   "main": "lib/index.js",
