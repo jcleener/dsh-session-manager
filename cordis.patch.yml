@@ -1,0 +1,4 @@
+# Mount the session manager settings page.
+- insert:
+    - id: dsh-session-manager
+      name: dsh-session-manager
