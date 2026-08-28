@@ -18,6 +18,7 @@ DSH 常驻插件：在侧边栏底部（设置上方）提供「会话管理」�
 ### v0.1.3
 
 - **修复永久删除后会话「回到未归档状态」的 bug**：批量永删 / 清空回收站只清掉了插件自身的回收站标记、删了磁盘目录，但会话仍残留在 DSH 的会话列表与 workspace 记账里，于是又出现在「全部」页签、看起来像点了「批量恢复」。现在永久删除后客户端会刷新 `sessions` / `workspaces` 数据源，被删除的会话立即从会话列表与侧边栏消失；宿主侧同时把会话 id 从 workspace 归档列表与各工作区的 `sessionIds` 记账中一并移除。
+- **修复「已归档」页签的批量恢复**：原来调用的是 DSH 客户端不存在的 `workspaces.unarchiveSession`（会直接报错）。现在改为走宿主 `/dsh-session-manager/metadata` 新增的 `unarchive` 动作，通过工作区注册表的 `archivedSessionIds` 记账移除会话（与 `archiveSession` 同一持久化路径），恢复后刷新 `workspaces`，会话回到「全部」。
 
 ### v0.1.1
 
