@@ -26,19 +26,28 @@ const check = (step, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${step}${detail ? '  — ' + detail : ''}`)
 }
 
-// ── fixture: 2 parents + 2 subagents (one declared by origin, one by parentId) ─
+// ── fixture: 2 parents + 2 subagents (one declared by origin, one by parentId)
+//             + 2 blank (empty-log) sessions, one of them the current one ─────
 const PARENT_A = { id: 'session-parent-a', displayTitle: '父会话甲', cwd: 'D:\\DSH\\a' }
 const PARENT_B = { id: 'session-parent-b', displayTitle: '父会话乙', cwd: 'D:\\DSH\\b' }
 const SUB_BY_ORIGIN = { id: 'sub-by-origin', displayTitle: '子会话甲', cwd: 'D:\\DSH\\a', origin: 'subagent', parentId: 'session-parent-a' }
 const SUB_BY_PARENTID = { id: 'sub-by-parentid', displayTitle: '子会话乙', cwd: 'D:\\DSH\\a', parentId: 'session-parent-a' }
+// A blank session has no title, so displayTitle falls back to the PROJECT BASENAME
+// ('plugin' here) — which is why an empty placeholder reads as the workspace itself.
+// The stale one carries a unique label so the assertion cannot be confused with the
+// cwd text ('D:\DSH\plugin') of the other rows.
+const BLANK_STALE = { id: 'session-blank-stale', displayTitle: '空占位-应隐藏', cwd: 'D:\\DSH\\plugin', blank: true }
+const BLANK_CURRENT = { id: 'session-blank-current', displayTitle: '当前空占位', cwd: 'D:\\DSH\\plugin', blank: true, retainedBy: { mainView: 1 } }
 
 const sessionsSnap = {
-  ids: [PARENT_A.id, SUB_BY_ORIGIN.id, PARENT_B.id, SUB_BY_PARENTID.id],
+  ids: [PARENT_A.id, SUB_BY_ORIGIN.id, PARENT_B.id, SUB_BY_PARENTID.id, BLANK_STALE.id, BLANK_CURRENT.id],
   byId: {
     [PARENT_A.id]: PARENT_A,
     [PARENT_B.id]: PARENT_B,
     [SUB_BY_ORIGIN.id]: SUB_BY_ORIGIN,
     [SUB_BY_PARENTID.id]: SUB_BY_PARENTID,
+    [BLANK_STALE.id]: BLANK_STALE,
+    [BLANK_CURRENT.id]: BLANK_CURRENT,
   },
 }
 let stateJson = { sessions: {}, categories: ['default'], trash: {}, categoryStyles: {} }
@@ -147,7 +156,12 @@ async function render(tab) {
   check('全部: shows parent 乙', text.includes(PARENT_B.displayTitle))
   check('全部: hides the subagent declared by origin', !text.includes(SUB_BY_ORIGIN.displayTitle))
   check('全部: hides the subagent declared by parentId only', !text.includes(SUB_BY_PARENTID.displayTitle))
-  check('全部: the counter counts parents only', text.includes('2 个会话'), text.match(/\d+ 个会话/)?.[0] ?? '(none)')
+  // A blank placeholder has no title, so its display name falls back to the project
+  // basename and reads as the workspace itself; the shipped browser hides it too,
+  // unless it is the session currently open.
+  check('全部: hides a blank placeholder (its fallback name would look like the workspace)', !text.includes('空占位-应隐藏'))
+  check('全部: keeps the blank session that IS the current one', text.includes('当前空占位'))
+  check('全部: the counter counts parents only', text.includes('3 个会话'), text.match(/\d+ 个会话/)?.[0] ?? '(none)')
 }
 
 // ── scenario 2: legacy trash rows that happen to be subagents stay hidden ───

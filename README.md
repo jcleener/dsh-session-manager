@@ -94,6 +94,14 @@
 - **降级**：取不到 `sessionQuery`（或读语料失败）时只在传入的 id 上操作，等价于旧行为，不抛错、不阻断请求。
 - **语义是「整棵子树」而不是「记住当时带了谁」**：由于子会话在 UI 中已无法被单独选中，能归档它的只有级联，两者等价 —— 因此不需要一张会随版本腐化的历史边表。
 
+## 空会话（占位）不列
+
+只有会话头、没有任何消息的会话（官方 `SessionSummary.blank`，即 New Session 留下的空占位）**不出现在面板里**，与官方 browse 的 `!session.blank || session.id === current` 同规则（唯一例外：它正是你当前打开的那条）。
+
+这不只是「它是空的」：空会话没有标题，而官方 `displayTitle` 的回退链是「durable title → **project basename** → session id」，所以一条空占位会显示成**目录名**（例如 `plugin`），看起来就像工作区本身 —— 曾因此被误认为「面板里出现了工作区，删掉会不会让该工作区的会话变成无工作区」。
+
+顺带明确边界：**本插件从不改动工作区记录**。它只动会话自己的归档位，以及工作区记账里的 `sessionIds` / `archivedSessionIds`；工作区的新增、重命名、删除都只属于官方操作。
+
 ## 文件结构
 
 ```
@@ -106,7 +114,7 @@ dsh-session-manager/
 └─ test/
    ├─ smoke-cascade-actions.mjs           # 宿主级联：archive/trash/untrash/purge 覆盖整棵子树（15 项）
    ├─ smoke-client-apply.mjs              # 契约断言 + 真装载 apply（23 项）
-   └─ smoke-client-invisible-subagents.mjs # 渲染断言：三个页签都不出现子会话（12 项）
+   └─ smoke-client-invisible-subagents.mjs # 渲染断言：子会话与空会话都不出现（14 项）
 ```
 
 ## 备注 / 已知限制
