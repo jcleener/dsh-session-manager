@@ -80,8 +80,19 @@
 - **注册 Slot UI**：`sidebar.footer.action`（面板入口，全宽按钮「会话管理」→ 固定层覆盖面板 + `Manager` 组件）。
 - **窗口事件约定**：`dsh-session-manager-category` / `dsh-session-manager-delete`（行菜单派发，`Footer` 监听后开弹窗）；`dsh-session-manager-metadata`（状态变更后广播给角标刷新）。
 - **窗口全局量**：`__DSH_SESSION_MANAGER_CATEGORIES__` / `__DSH_SESSION_MANAGER_CATEGORY_STYLES__` / `__DSH_SESSION_MANAGER_TRASH__`（供同页其它 UI 读取）。
-- **宿主可选服务**：`sessions`（判断会话是否活跃）、`workspaceRegistry`（`archiveSession` / `list` / `detachSession` / `enqueueOperation` / `setState`），取不到时回退为直接文件读写。
+- **宿主可选服务**：`sessionQuery`（子树谱系，取不到则退化为只处理传入 id）、`sessions`（判断会话是否活跃）、`workspaceRegistry`（`archiveSession` / `list` / `detachSession` / `enqueueOperation` / `setState`），取不到时回退为直接文件读写。
 - **不注册** model 工具、命令、事件监听（代码中不存在）。
+
+## 子会话（subagent）：日常不可见
+
+0.1.6 起，**「子会话」在日常使用中不是一个可见概念** —— 用户只面对父会话。
+
+- **列表**：三个页签（全部 / 已归档 / 回收站）都只显示父会话；判定为 `origin === 'subagent'` 或带 `parentId` 的行一律不渲染，页签标题的会话计数也只数父会话。
+- **操作**：归档 / 归档恢复 / 删除到回收站 / 回收站恢复 / 永久删除，都以「父会话 + 整棵子树」为单位。子树由**宿主**按权威谱系展开（`sessionQuery.listSessions()` 的 `header.origin` / `header.parentSession`，递归到任意深度），不依赖浏览器端的列表快照 —— 所以界面里根本看不到的子会话也会被一起处理。
+- **永久删除会连日志一起删**：同时删除子会话的会话日志目录与投影缓存行；否则会留下永远看不见、也再无法触达的孤儿文件。
+- **界面上不提示子树规模**：按「无感」要求，任何位置都不出现「子会话」字样（确认框、完成提示、计数都不提）。
+- **降级**：取不到 `sessionQuery`（或读语料失败）时只在传入的 id 上操作，等价于旧行为，不抛错、不阻断请求。
+- **语义是「整棵子树」而不是「记住当时带了谁」**：由于子会话在 UI 中已无法被单独选中，能归档它的只有级联，两者等价 —— 因此不需要一张会随版本腐化的历史边表。
 
 ## 文件结构
 
@@ -89,9 +100,13 @@
 dsh-session-manager/
 ├─ package.json        # name/version 0.1.9、exports、dsh.bundle.patch、dsh.client(platform: web)
 ├─ cordis.patch.yml    # 挂载行：insert id/name = dsh-session-manager
-└─ lib/
-   ├─ index.js         # 宿主半：状态文件读写、回收站/归档/永久删除、两个 HTTP 路由
-   └─ client.js       # 浏览器半：侧边栏入口与管理面板、行菜单注入、分类角标绘制
+├─ lib/
+│  ├─ index.js         # 宿主半：状态文件读写、回收站/归档/永久删除、子树展开、两个 HTTP 路由
+│  └─ client.js        # 浏览器半：侧边栏入口与管理面板、行菜单注入、分类角标绘制
+└─ test/
+   ├─ smoke-cascade-actions.mjs           # 宿主级联：archive/trash/untrash/purge 覆盖整棵子树（15 项）
+   ├─ smoke-client-apply.mjs              # 契约断言 + 真装载 apply（23 项）
+   └─ smoke-client-invisible-subagents.mjs # 渲染断言：三个页签都不出现子会话（12 项）
 ```
 
 ## 备注 / 已知限制
@@ -99,7 +114,7 @@ dsh-session-manager/
 - **活跃会话无法真正删除**：核心未暴露会话关闭/删除 RPC，`ctx.sessions` 是只读 store；因此活跃会话只写入 `pendingPurge` 并归档，由下一次 `apply()` 的 `flushPendingPurge` 清理。UI 会提示「它们正在被使用，重启 DSH 后才会彻底清除」。
 - **删除依赖归档机制**：核心的 archive 是唯一能把会话从所有侧边栏分组隐藏、又保留工作区记账槽位（恢复时回到原位）的手段，所以「删除」= 归档 + 回收站记录。
 - **直接改写核心数据文件**：`storages\workspace.json`（归档集合、工作区 `sessionIds`）与投影缓存 `storages\session_projcache\sessions\<id>.json`。代码注释说明：投影缓存行会晚于日志存活，所以两者必须同时删。优先走 `workspaceRegistry`，仅在取不到时才直接写文件。
-- **对核心 DOM 的硬编码假设**：`[data-slot="sidebar.workspaces"]`、`[role="menu"]`、`button[role="menuitem"]`、`[role="treeitem"]`、行标题类名匹配 `*_title`、会话 ID 前缀 `session-`；会话 ID 只能从行元素的 React fiber（`__reactFiber$`）上溯 `props.node.id` 取得 —— 核心侧边栏改版会让行菜单与角标失效。
+- **对核心 DOM 的硬编码假设**：`[data-slot="sidebar.workspaces"]`、`[role="menu"]`、`button[role="menuitem"]`、`[role="treeitem"]`、行标题类名匹配 `*_title`、会话 ID 前缀 `session-`；会话 ID 只能从行元素的 React fiber（`__reactFiber$`）上溯 `props.node.id` 取得 —— 核心侧边栏改版会让行菜单与角标失效。注意**子会话的 id 是不带 `session-` 前缀的裸 UUID**（其日志目录同样是裸 UUID），所以行菜单注入与分类角标从来不会作用到子会话行上；这与「子会话不可见」是一致的。
 - **分类是单级字符串**：输入框占位符即写「新分类（单级）」；分类名会去掉 `/` 并截断 80 字符。
 - **回收站上限硬编码 100**（`TRASH_LIMIT`）。
 - **同源校验较宽松**：`trusted()` 只要求 `Host` 存在且 `Origin` 为空或 host 相同；缺 `Origin` 的请求（非浏览器）会被放行。
