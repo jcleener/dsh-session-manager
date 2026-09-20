@@ -23,6 +23,10 @@
 
 - DSH web profile（`$env:DSH_HOME\profiles\web`）。宿主使用 `webServer` 服务；客户端使用 `slots` / `workspaces` / `sessions`。
 - 代码注释以 DSH 0.1.2 的核心行为为参照（侧边栏行菜单无 slot 接缝、核心不再提供本插件所需的集成），开发环境为 0.1.5-rc.1。
+- **兼容性：DSH 0.1.6-alpha.2 可用**（2026-09-20 实测）。该版本从 `ISessions` 删除了
+  `open` / `openSubagent` / `clear`，并从 `SessionListState` 删除了 `current`；本插件原先那段
+  「被删的是不是当前会话 → 顺手 `clear()`」的逻辑已随之移除（选中态归壳层 `ui-workspace` /
+  `ui-session` 自己处理），只保留仍然存在的 `sessions.refresh()`。0.1.5-rc.1 亦兼容。
 - 无 Node 版本下限声明（`package.json` 未写 `engines`，未在代码中明确）。
 
 ## 部署（重启 + 硬刷新）
