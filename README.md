@@ -128,3 +128,10 @@ dsh-session-manager/
 - **同源校验较宽松**：`trusted()` 只要求 `Host` 存在且 `Origin` 为空或 host 相同；缺 `Origin` 的请求（非浏览器）会被放行。
 - **图标非强依赖**：`IconSettingsOutline16` / `IconTrashOutline16` 取不到时菜单项只显示文字，不报错。
 - **文档与实现不一致的两处**（代码为准）：`cordis.patch.yml` 注释写的是 "Mount the session manager settings page"，但实现注册的是侧边栏 footer action，**没有设置页**；`package.json` 的 `dsh.client.inject` 只声明 `@deepseek-ai/dsh-client-ui-renderer` 与 `@deepseek-ai/dsh-client-ui-sidebar`，而 `lib/client.js` 实际 `require('@deepseek-ai/dsh-client-ui-primitives')`（该包未在 inject 列表中声明）。
+
+## 兼容性
+
+- **DSH 0.1.7-rc.1：可用**（2026-09-24 实测，无需改动）。宿主路由 `/state`、`/metadata` 正常；
+  客户端半在 `sidebar.footer.action`(-30) 占位为 active；依赖的 `useSessions` / `useWorkspaces`
+  与 `workspaces` / `sessions` 客户端服务在 0.1.7 均存在。
+- **DSH 0.1.6-alpha.2：可用**。
