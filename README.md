@@ -1,5 +1,12 @@
 # dsh-session-manager · DSH 会话管理器
 
+> **本插件的工作区布局**（规范见 [plugins/README.md](../README.md)）
+>
+> - `code/` 运行代码 ｜ `tests/` 测试代码 ｜ `docs/` 开发文档 ｜ `reference/` 参考资料
+> - `package.json` / `cordis.patch.yml` / `README.md` / `LICENSE` 是包契约文件，**必须留在本目录根**
+> - 状态：**休眠** ｜ 运行实体：`~/.dsh/profiles/desktop/plugins/dsh-session-manager/`
+> - 本目录是**备份 + 开发文档存放处**；在此改动**不会自动生效**，需同步到 profile 并重启实例
+
 > 给侧边栏加一个「会话管理」入口：浏览、搜索、分类、归档、回收站与恢复，全部在一个面板里完成。
 > 删除不等于销毁数据 —— 「删除」= 归档（从侧边栏隐藏）+ 移入回收站，随时可恢复；
 > 真正占用中的会话不会被拆掉，只会记入待删除清单，**重启 DSH 后**才彻底清除。

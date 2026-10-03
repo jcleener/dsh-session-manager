@@ -3,7 +3,11 @@ import { readFile, writeFile, mkdir, rename, readdir, access, rm } from 'node:fs
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh');
-const file = join(dshHome, 'profiles', 'web', 'dsh-session-manager.json');
+// Profile-agnostic on purpose. Session ids are global (they live under $DSH_HOME/sessions),
+// and nothing in the plugin runtime exposes the active profile directory — the desktop host
+// passes it as argv, and DSH_PROFILE_DIR is not set — so a profile-scoped path silently
+// follows whichever profile happened to be hardcoded (it used to be `profiles/web`).
+const file = join(dshHome, 'dsh-session-manager.json');
 const sessionsRoot = join(dshHome, 'sessions');
 // 0.1.2: the projection cache keeps a per-session row that outlives the log
 // unless it is removed explicitly. A stale row is what lets a purged session

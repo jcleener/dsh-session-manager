@@ -49,8 +49,8 @@ window.__ModuleLoader__.load({ id: 'dsh-session-manager', factory: (require) => 
   const ROW_SELECTOR = '[role="treeitem"]';
   const SESSION_ID_PREFIX = 'session-';
   const MENU_ACTIONS = [
-    { key: 'category', label: '设置类型', icon: 'IconSettingsOutline16', event: 'dsh-session-manager-category' },
-    { key: 'delete', label: '直接删除', icon: 'IconTrashOutline16', event: 'dsh-session-manager-delete' },
+    { key: 'category', label: '设置类型', icon: 'IconSettingsOutlineMedium', event: 'dsh-session-manager-category' },
+    { key: 'delete', label: '删除', icon: 'IconTrashOutlineMedium', event: 'dsh-session-manager-delete' },
   ];
   const decoratedMenus = new WeakSet();
   const iconMarkupCache = new Map();
@@ -280,10 +280,45 @@ window.__ModuleLoader__.load({ id: 'dsh-session-manager', factory: (require) => 
     };
   }
 
-  // 0.1.2: acquire services through ctx.inject (waits for every named service)
-  // instead of reading them once with ctx.get at apply time. The 0.1.1 build
-  // bailed out silently whenever `slots` was not yet provided when this fiber
-  // applied, which left the sidebar entry permanently missing.
-  function apply(ctx){ ctx.inject(['slots','workspaces','sessions'],scope=>{ workspacesApi=scope.workspaces; sessionsApi=scope.sessions; scope.slots.inject('sidebar.footer.action',()=>scope.slots.register({name:'sidebar.footer.action',id:'dsh-session-manager-entry',order:-30,label:'会话管理'},Footer)); ctx.effect(()=>watchSessionMenus(scope),'dsh-session-manager: session row menu actions'); ctx.effect(()=>watchCategoryBadges(),'dsh-session-manager: sidebar category badges'); }); }
+  // Official 0.1.7 menu slot: the owner supplies the row's sessionId and the
+  // row-scoped useMenuOpenState hook. Registering here keeps these actions in
+  // the shipped menu's keyboard/focus lifecycle instead of cloning DOM nodes.
+  function SessionMenuAction({sessionId,useMenuOpenState,action}){
+    const [,setMenuOpen]=useMenuOpenState();
+    let primitives={};
+    try{primitives=require('@deepseek-ai/dsh-client-ui-primitives')||{};}catch(_e){}
+    const MenuItemButton=primitives.MenuItemButton;
+    const Icon=primitives[action.icon];
+    const onSelect=()=>{
+      setMenuOpen(false);
+      window.dispatchEvent(new CustomEvent(action.event,{detail:{sessionId}}));
+    };
+    if(typeof MenuItemButton==='function')return h(MenuItemButton,{
+      separatorBefore:action.key==='category',
+      danger:action.key==='delete',
+      icon:typeof Icon==='function'?h(Icon,{}):undefined,
+      onSelect
+    },action.label);
+    // Keep a minimal fallback for an older Web profile whose primitive bundle
+    // predates MenuItemButton; the official Slot still owns menu lifecycle.
+    return h('button',{type:'button',role:'menuitem',onClick:onSelect},action.label);
+  }
+  function apply(ctx){ ctx.inject(['slots','workspaces','sessions'],scope=>{
+    workspacesApi=scope.workspaces;
+    sessionsApi=scope.sessions;
+    scope.slots.inject('sidebar.footer.action',()=>scope.slots.register({name:'sidebar.footer.action',id:'dsh-session-manager-entry',order:-30,label:'会话管理'},Footer));
+    scope.slots.inject('sidebar.workspaces.session.menu.item',()=>{
+      const categoryOff=scope.slots.register(
+        {name:'sidebar.workspaces.session.menu.item',id:'dsh-session-manager-category',order:500,label:'设置类型'},
+        props=>h(SessionMenuAction,{...props,action:MENU_ACTIONS[0]})
+      );
+      const deleteOff=scope.slots.register(
+        {name:'sidebar.workspaces.session.menu.item',id:'dsh-session-manager-delete',order:510,label:'删除'},
+        props=>h(SessionMenuAction,{...props,action:MENU_ACTIONS[1]})
+      );
+      return ()=>{categoryOff();deleteOff();};
+    });
+    ctx.effect(()=>watchCategoryBadges(),'dsh-session-manager: sidebar category badges');
+  }); }
   return {apply};
  }});
