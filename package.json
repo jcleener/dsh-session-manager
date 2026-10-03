@@ -13,6 +13,9 @@
     "code",
     "cordis.patch.yml"
   ],
+  "scripts": {
+    "test": "node tests/trash-archive-invariant.test.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

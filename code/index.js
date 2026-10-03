@@ -41,7 +41,7 @@ async function unarchiveSessions(ctx,ids){const list=await subtreeOf(ctx&&ctx.ge
 // unarchiving restores the original position. The plugin's "delete" needs it:
 // 0.1.1's host-side integration (which hid trashed sessions) is gone, so
 // without archiving a "deleted" session stays visible and fully usable.
-async function archiveInWorkspace(ids){try{const w=JSON.parse(await readFile(workspaceFile,'utf8'));const g=w&&w.global;if(!g||!Array.isArray(g.archivedSessionIds))return;const have=new Set(g.archivedSessionIds.map(String));let changed=false;for(const id of ids.map(String))if(!have.has(id)){g.archivedSessionIds.push(id);have.add(id);changed=true;}if(!changed)return;const tmp=workspaceFile+'.tmp';await writeFile(tmp,JSON.stringify(w,null,2)+'\n','utf8');await rename(tmp,workspaceFile);}catch{}}
+async function archiveInWorkspace(ids){try{const w=JSON.parse(await readFile(workspaceFile,'utf8'));const g=w&&w.global;if(!g)return;if(!Array.isArray(g.archivedSessionIds))g.archivedSessionIds=[];const have=new Set(g.archivedSessionIds.map(String));let changed=false;for(const id of ids.map(String))if(!have.has(id)){g.archivedSessionIds.push(id);have.add(id);changed=true;}if(!changed)return;const tmp=workspaceFile+'.tmp';await writeFile(tmp,JSON.stringify(w,null,2)+'\n','utf8');await rename(tmp,workspaceFile);}catch{}}
 // ── 子树展开（0.1.6 起）────────────────────────────────────────────────────
 // 子会话（subagent）在界面上不可见，因此「子会话」这个概念对用户不存在：删除 / 归档 /
 // 恢复父会话时，整棵子树一起处理，用户不需要知道它们。
@@ -83,10 +83,81 @@ async function subtreeOf(sessionQuery, roots) {
 	return out;
 }
 async function archiveSessions(ctx,ids){const list=await subtreeOf(ctx&&ctx.get('sessionQuery'),ids);if(!list.length)return false;const wreg=ctx&&ctx.get('workspaceRegistry');if(wreg&&typeof wreg.archiveSession==='function'){/* 逐 id 容错：一个已消失的 id 不应让整批回退到直写文件（那会把未知 id 也写进归档表，并与 registry 内存态分歧） */let landed=0;for(const id of list){try{await wreg.archiveSession(id);landed+=1;}catch{}}if(landed>0)return true;}await archiveInWorkspace(list);return false;}
+
+// ── 「删除 ⟹ 已归档」不变量 ────────────────────────────────────────────────
+// 外部消费者（如 dsh-qq-bridge）只读 workspaceRegistry 的归档集来判断「未删除」，
+// 因此进了 trash / pendingPurge 的会话**必须**真的进到 registry 的归档集里。
+// archiveSessions() 有三种失败却不报错的情形：
+//   ① 逐个 archiveSession 全部抛错 → 兜底直写文件，而 workspace.json 缺 global 段时旧实现静默空转；
+//   ② 只有一部分成功 → landed>0 直接 return true，**部分失败被当成成功**；
+//   ③ 即便写文件成功，registry 的**内存态**也不会更新——而消费者读的正是内存态。
+// forceArchive() 逐条核对 registry 内存态并补齐；repairTrashArchiveInvariant() 在启动时修补历史遗留。
+function archivedSet(ctx){
+  try{
+    const wreg=ctx&&typeof ctx.get==='function'?ctx.get('workspaceRegistry'):void 0;
+    if(!wreg||typeof wreg.requireState!=='function')return null; // null = registry 不可用，无法核对
+    const st=wreg.requireState();
+    const list=st&&Array.isArray(st.archivedSessionIds)?st.archivedSessionIds:[];
+    return new Set(list.map(String));
+  }catch{return null;}
+}
+const missingFrom=(set,ids)=>set?ids.filter(id=>!set.has(String(id))):ids.slice();
+async function archivedSetFromFile(){try{const w=JSON.parse(await readFile(workspaceFile,'utf8'));const g=w&&w.global;return new Set((g&&Array.isArray(g.archivedSessionIds)?g.archivedSessionIds:[]).map(String));}catch{return new Set();}}
+/**
+ * 保证这些 id 一定进到归档集（幂等）。
+ * @returns {Promise<{ok:boolean, missing:string[]}>}
+ */
+async function forceArchive(ctx,ids){
+  const roots=[...new Set((Array.isArray(ids)?ids:[]).map(String).filter(x=>x&&x.length<300))];
+  if(!roots.length)return {ok:true,missing:[]};
+  const list=await subtreeOf(ctx&&ctx.get('sessionQuery'),roots);
+  const all=[...new Set([...list.map(String),...roots])];
+  const wreg=ctx&&typeof ctx.get==='function'?ctx.get('workspaceRegistry'):void 0;
+  const canArchive=!!(wreg&&typeof wreg.archiveSession==='function');
+  // ① 首选官方逐 id 动作：它会发 domain/changed，界面即时更新
+  if(canArchive){for(const id of all){try{await wreg.archiveSession(id);}catch{}}}
+  let missing=missingFrom(archivedSet(ctx),all);
+  // ② 复核仍缺的，直接改 registry state（与 unarchiveSessions 对称；写文件不解决消费者读内存态的问题）
+  if(missing.length&&wreg&&typeof wreg.enqueueOperation==='function'&&typeof wreg.requireState==='function'&&typeof wreg.setState==='function'){
+    try{
+      await wreg.enqueueOperation(async()=>{
+        const st=wreg.requireState();
+        const arch=Array.isArray(st.archivedSessionIds)?st.archivedSessionIds.slice():[];
+        const have=new Set(arch.map(String));
+        let changed=false;
+        for(const id of missing)if(!have.has(id)){arch.push(id);have.add(id);changed=true;}
+        if(changed)await wreg.setState({...st,archivedSessionIds:arch});
+      });
+    }catch{}
+    missing=missingFrom(archivedSet(ctx),all);
+  }
+  // ③ registry 完全不可用时才退回直写文件
+  if(!canArchive&&!(wreg&&typeof wreg.setState==='function')){
+    await archiveInWorkspace(all);
+    missing=missingFrom(await archivedSetFromFile(),all);
+  }
+  return {ok:missing.length===0,missing};
+}
+/**
+ * 启动核对：trash ∪ pendingPurge 里的每个 id 都必须在 registry 归档集里。
+ * 修复前的版本可能留下「已删除但未打归档标签」的会话，升级后会让外部消费者短暂看到
+ * 已删会话，因此启动时补一次。
+ */
+async function repairTrashArchiveInvariant(ctx){
+  try{
+    const state=await readState();
+    const ids=[...new Set([...Object.keys(state.trash),...Object.keys(state.pendingPurge)])];
+    if(!ids.length)return;
+    const missing=missingFrom(archivedSet(ctx),ids);
+    if(!missing.length)return;
+    const r=await forceArchive(ctx,missing);
+    console.warn(`[dsh-session-manager] trash⟹archived 不变量修补：${missing.length} 个会话，${r.ok?'已补归档':`仍有 ${r.missing.length} 个失败（外部消费者可能短暂看到已删会话）`}`);
+  }catch(e){console.warn('[dsh-session-manager] trash⟹archived 不变量核对失败：'+(e&&e.message||e));}
+}
 // Purge splits by liveness: a cold session loses its log and its cache row at
 // once, while a live one is only archived and recorded in `pendingPurge` —
 // apply() drains that list on the next start, when nothing is live any more.
-async function purgeSessions(ctx,state,ids){const list=await subtreeOf(ctx&&ctx.get('sessionQuery'),ids);const deferred=[];for(const id of list){delete state.trash[id];delete state.sessions[id];if(sessionIsLive(ctx,id)){state.pendingPurge[id]=Date.now();deferred.push(id);continue;}await purgeSessionDir(id);await purgeProjectionCache(id);}if(deferred.length)await archiveSessions(ctx,deferred);const immediate=list.filter(id=>!deferred.includes(id));if(immediate.length)await removeFromWorkspaceAccounting(ctx,immediate);return deferred;}
+async function purgeSessions(ctx,state,ids){const list=await subtreeOf(ctx&&ctx.get('sessionQuery'),ids);const deferred=[];for(const id of list){delete state.trash[id];delete state.sessions[id];if(sessionIsLive(ctx,id)){state.pendingPurge[id]=Date.now();deferred.push(id);continue;}await purgeSessionDir(id);await purgeProjectionCache(id);}if(deferred.length)await forceArchive(ctx,deferred);const immediate=list.filter(id=>!deferred.includes(id));if(immediate.length)await removeFromWorkspaceAccounting(ctx,immediate);return deferred;}
 async function flushPendingPurge(ctx){try{const state=await readState();const ready=Object.keys(state.pendingPurge).filter(id=>!sessionIsLive(ctx,id));if(!ready.length)return;for(const id of ready){await purgeSessionDir(id);await purgeProjectionCache(id);delete state.pendingPurge[id];delete state.sessions[id];delete state.trash[id];}await removeFromWorkspaceAccounting(ctx,ready);await saveState(state);}catch{}}
 // 0.1.2: prefer the live workspaceRegistry so its in-memory state stays in
 // sync and every write emits domain/changed (the client workspace feed then
@@ -99,4 +170,4 @@ async function body(req){const chunks=[];for await(const c of req)chunks.push(Bu
 function categoryName(value){return typeof value==='string'?value.trim().replace(/[\/]/g,'').slice(0,80):'';}
 function cleanIds(value){return Array.isArray(value)?value.filter(x=>typeof x==='string'&&x.length<300):[];}
 async function enforceTrashLimit(ctx,state){const entries=Object.entries(state.trash).sort((a,b)=>a[1]-b[1]);const ids=[];let overflow=entries.length-TRASH_LIMIT;for(const [id] of entries){if(overflow<=0)break;ids.push(id);overflow--;}if(ids.length)await purgeSessions(ctx,state,ids);}
-export function apply(ctx){flushPendingPurge(ctx);ctx.inject(['webServer'],host=>{const web=host.webServer;const a=web.register({kind:'exact',path:'/dsh-session-manager/state',handler:async(req,res)=>{if(req.method!=='GET')return json(res,405,{error:'method'});json(res,200,await readState());}});const b=web.register({kind:'exact',path:'/dsh-session-manager/metadata',handler:async(req,res)=>{if(req.method==='OPTIONS'){res.writeHead(204,{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type','access-control-max-age':'86400'});return res.end();}if(req.method!=='POST')return json(res,405,{error:'method'});if(!trusted(req))return json(res,403,{error:'untrusted origin',origin:req.headers.origin,host:req.headers.host});try{const input=await body(req);const state=await readState();const category=categoryName(input.category);const action=input.action;let deferred=[];if(action==='category-add'){if(!category)return json(res,400,{error:'category required'});if(!state.categories.includes(category))state.categories.push(category);}else if(action==='category-delete'){if(!category||category===DEFAULT_CATEGORY)return json(res,400,{error:'default category cannot be deleted'});state.categories=state.categories.filter(x=>x!==category);delete state.categoryStyles[category];for(const id of Object.keys(state.sessions))if(state.sessions[id].category===category)state.sessions[id]={...state.sessions[id],category:''};}else if(action==='category-style'){if(!category||!state.categories.includes(category))return json(res,400,{error:'category not found'});const background=validColor(input.background);const color=validColor(input.color);state.categoryStyles[category]={...(background?{background}:{}),...(color?{color}:{})};}else if(action==='categorize'){const ids=cleanIds(input.ids);if(!category)return json(res,400,{error:'category required'});if(!state.categories.includes(category))state.categories.push(category);for(const id of ids)state.sessions[id]={...(state.sessions[id]||{}),category};}else if(action==='uncategorize'){const ids=cleanIds(input.ids);for(const id of ids){const record=state.sessions[id];if(!record)continue;const next={...record};delete next.category;if(Object.keys(next).length)state.sessions[id]=next;else delete state.sessions[id];}}else if(action==='trash'){const ids=cleanIds(input.ids);const now=Date.now();const snaps=input.sessions&&typeof input.sessions==='object'?input.sessions:{};for(const id of ids){state.trash[id]=now;const old=state.sessions[id]||{};const snap=snaps[id]||{};const title=typeof snap.title==='string'?snap.title.slice(0,200):'';const cwd=typeof snap.cwd==='string'?snap.cwd.slice(0,400):'';state.sessions[id]={...(old||{}),...(title?{title}:{}),...(cwd?{cwd}:{})};}await archiveSessions(ctx,ids);await enforceTrashLimit(ctx,state);}else if(action==='archive'){const ids=cleanIds(input.ids);await archiveSessions(ctx,ids);}else if(action==='untrash'){const ids=cleanIds(input.ids);for(const id of ids){delete state.trash[id];}await unarchiveSessions(ctx,ids);}else if(action==='unarchive'){const ids=cleanIds(input.ids);await unarchiveSessions(ctx,ids);}else if(action==='purge'){const ids=cleanIds(input.ids);deferred=await purgeSessions(ctx,state,ids);}else if(action==='purge-all'){const ids=Object.keys(state.trash);deferred=await purgeSessions(ctx,state,ids);}else return json(res,400,{error:'unknown action'});await saveState(state);json(res,200,{ok:true,state,deferred});}catch(e){json(res,400,{error:String(e)});}}});return()=>{a();b();};});}
+export function apply(ctx){flushPendingPurge(ctx).then(()=>repairTrashArchiveInvariant(ctx)).catch(()=>{});ctx.inject(['webServer'],host=>{const web=host.webServer;const a=web.register({kind:'exact',path:'/dsh-session-manager/state',handler:async(req,res)=>{if(req.method!=='GET')return json(res,405,{error:'method'});json(res,200,await readState());}});const b=web.register({kind:'exact',path:'/dsh-session-manager/metadata',handler:async(req,res)=>{if(req.method==='OPTIONS'){res.writeHead(204,{'access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type','access-control-max-age':'86400'});return res.end();}if(req.method!=='POST')return json(res,405,{error:'method'});if(!trusted(req))return json(res,403,{error:'untrusted origin',origin:req.headers.origin,host:req.headers.host});try{const input=await body(req);const state=await readState();const category=categoryName(input.category);const action=input.action;let deferred=[];if(action==='category-add'){if(!category)return json(res,400,{error:'category required'});if(!state.categories.includes(category))state.categories.push(category);}else if(action==='category-delete'){if(!category||category===DEFAULT_CATEGORY)return json(res,400,{error:'default category cannot be deleted'});state.categories=state.categories.filter(x=>x!==category);delete state.categoryStyles[category];for(const id of Object.keys(state.sessions))if(state.sessions[id].category===category)state.sessions[id]={...state.sessions[id],category:''};}else if(action==='category-style'){if(!category||!state.categories.includes(category))return json(res,400,{error:'category not found'});const background=validColor(input.background);const color=validColor(input.color);state.categoryStyles[category]={...(background?{background}:{}),...(color?{color}:{})};}else if(action==='categorize'){const ids=cleanIds(input.ids);if(!category)return json(res,400,{error:'category required'});if(!state.categories.includes(category))state.categories.push(category);for(const id of ids)state.sessions[id]={...(state.sessions[id]||{}),category};}else if(action==='uncategorize'){const ids=cleanIds(input.ids);for(const id of ids){const record=state.sessions[id];if(!record)continue;const next={...record};delete next.category;if(Object.keys(next).length)state.sessions[id]=next;else delete state.sessions[id];}}else if(action==='trash'){const ids=cleanIds(input.ids);const now=Date.now();const snaps=input.sessions&&typeof input.sessions==='object'?input.sessions:{};for(const id of ids){state.trash[id]=now;const old=state.sessions[id]||{};const snap=snaps[id]||{};const title=typeof snap.title==='string'?snap.title.slice(0,200):'';const cwd=typeof snap.cwd==='string'?snap.cwd.slice(0,400):'';state.sessions[id]={...(old||{}),...(title?{title}:{}),...(cwd?{cwd}:{})};}await forceArchive(ctx,ids);await enforceTrashLimit(ctx,state);}else if(action==='archive'){const ids=cleanIds(input.ids);await archiveSessions(ctx,ids);}else if(action==='untrash'){const ids=cleanIds(input.ids);for(const id of ids){delete state.trash[id];}await unarchiveSessions(ctx,ids);}else if(action==='unarchive'){const ids=cleanIds(input.ids);await unarchiveSessions(ctx,ids);}else if(action==='purge'){const ids=cleanIds(input.ids);deferred=await purgeSessions(ctx,state,ids);}else if(action==='purge-all'){const ids=Object.keys(state.trash);deferred=await purgeSessions(ctx,state,ids);}else return json(res,400,{error:'unknown action'});await saveState(state);json(res,200,{ok:true,state,deferred});}catch(e){json(res,400,{error:String(e)});}}});return()=>{a();b();};});}

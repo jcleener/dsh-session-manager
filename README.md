@@ -142,3 +142,21 @@ dsh-session-manager/
   客户端半在 `sidebar.footer.action`(-30) 占位为 active；依赖的 `useSessions` / `useWorkspaces`
   与 `workspaces` / `sessions` 客户端服务在 0.1.7 均存在。
 - **DSH 0.1.6-alpha.2：可用**。
+
+## 「删除 ⟹ 已归档」不变量（2026-10-03 起）
+
+本插件的「删除」不只改自己的状态文件，它**必须**同时把会话写进 DSH 核心的归档集
+（`workspaceRegistry.archivedSessionIds`）。原因：归档是核心唯一能处处隐藏会话的机制；
+而当「已删除」被用作**跨插件**信号时（见 `dsh-qq-bridge` 的会话列表），消费者读的正
+是归档集。
+
+`forceArchive()` 负责保证这一点，覆盖 `archiveSessions()` 三种会**静默失败**的路径：
+
+1. 逐个 `archiveSession` 全部抛错 → 旧实现兜底直写文件，而 `workspace.json` 缺 `global` 段时空转；
+2. 只部分成功 → 旧实现 `landed>0` 直接 `return true`，部分失败被当成成功；
+3. 写文件成功但 registry **内存态**没更新 → 而消费者读的正是内存态。
+
+`repairTrashArchiveInvariant()` 在每次启动时（串行排在 `flushPendingPurge()` 之后）
+核对 `trash ∪ pendingPurge` 并补齐历史遗留。
+
+回归测试：`node tests/trash-archive-invariant.test.mjs`（12 项，覆盖上述三种路径）。
